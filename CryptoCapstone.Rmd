@@ -1,0 +1,1613 @@
+---
+title: "Crypto Currencies - HarvardX Capstone Report"
+author: "Thierry Morvany"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  pdf_document:
+    citation_package: biblatex
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+    latex_engine: pdflatex
+  word_document:
+    toc: yes
+    toc_depth: '3'
+bibliography: bibliography.bib
+biblio-style: phys 
+link-citations: yes
+urlcolor: blue
+---
+
+\newpage
+
+```{r setup, include=FALSE,  echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message=FALSE)
+
+if(!require(kableExtra)) install.packages("kableExtra", repos = "http://cran.us.r-project.org")
+if(!require(corrplot)) install.packages("corrplot", repos = "http://cran.us.r-project.org")
+if(!require(ggrepel)) install.packages("ggrepel", repos = "http://cran.us.r-project.org")
+if(!require(ggpubr)) install.packages("ggpubr", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(pls)) install.packages("pls", repos = "http://cran.us.r-project.org")
+```
+
+
+# Introduction
+
+The following data science project is my final capstone as part of the HarvardX's Data Science Professional Certificate series. The code for this project can be found on [GitHub](https://github.com/DecidIT/CryptoCurrencyFcst) repository.\   
+Lately, the crypto currencies grab headlines when their value massively varied  following bank announcements[@bank] or Elon Musk's[@Musk-tweets]. Then, the dataset of historic crypto currencies available on [Kaggle website](https://www.kaggle.com/sudalairajkumar/cryptocurrencypricehistory) seems to promise some relatable insights. Following an Exploration Data Analisys, I will prepare the data before a forecast of a couple of features available in the dataset downloaded from \   
+
+Please, note that my 16GB-ram laptop was not powerfull enough all along. I then had to create an instance -of type r5.4xlarge on an Amazon Web Services (AWS) account to run the code built with R version `r getRversion()`. The creation procedure is described [here](https://jagg19.github.io/2019/08/aws-r/).
+
+
+# Exploration Data Analysis
+
+## Libraries
+Diverse tools are necessary to run the project, thus the libraries below will be used:
+```{r Libraries}
+#--- Exploration Data Analysis
+library(tidyverse)    # Organization and visualization data
+library(caret)        # Machine learning procedure
+library(data.table)   # For table manipulation
+library(kableExtra)   # For table presentation
+library(corrplot)     # For correlation visualization
+library(ggrepel)      # Advanced geometric objects managenment
+library(ggpubr)       # Complent to ggplot2
+library(lubridate)    # For date management
+#--- Forecast
+library(rpart)        # Recursive Partitioning and Regression Trees
+library(randomForest) # Random Forests for Classification and Regression
+library(Rborist)      # Parallel Implementation of the Random Forest Algorithm
+library(pls)          # Partial Least Squares and Principal Component Regression
+```
+
+## Dataset
+
+```{r GetData, echo= FALSE}
+options(digits = 4)
+cryptos <- read_csv("cryptos.csv")
+```
+
+
+I downloaded the 23 files from [Kaggle website](https://www.kaggle.com/sudalairajkumar/cryptocurrencypricehistory) and merge them in one. Below is an extract of the dataset that shows the variables: 
+```{r T_DataPreview, echo= FALSE}
+cryptos %>% 
+  head(.,5) %>% 
+  kbl(booktabs = TRUE, caption = "Data Preview", 
+      digits = 3, format.args = list(big.mark = ",",  scientific = FALSE)) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))
+```
+This dataset has the historical price information of some of the top crypto currencies by market capitalization where the variables are described below:
+
+* Date   : date of observation
+* Open   : Opening price on the given day
+* High   : Highest price on the given day
+* Low    : Lowest price on the given day
+* Close  : Closing price on the given day
+* Volume : Volume of transactions on the given day
+* Market Cap : Market capitalization in USD
+\   
+
+The observations in the dataset are for `r length(unique(cryptos$Name))` crypto currencies:
+```{r T_CurrName, echo= FALSE}
+CurrNames <- cryptos %>% select(Name, Symbol) %>% mutate(Symbol= as.character(Symbol)) %>% distinct() %>%
+           bind_rows(. , data.frame(Name= " ", Symbol= " "))
+
+matrix(CurrNames$Name, nrow = 6, ncol= 4) %>% 
+  kbl(booktabs = TRUE, linesep = "", caption = 'Currencies') %>% 
+  kable_styling(latex_options = c("striped","HOLD_position"))
+```
+
+The file make available different intervals of history for the currencies:
+```{r, echo= FALSE, fig.cap="Variables correlations"}
+cryptos_periods <- cryptos %>% 
+  group_by(Name) %>% 
+  summarise(Name= Name, Symbol= Symbol, 
+            From= min(Date), To= max(Date), 
+            Duration= as.integer(To-From)) %>%
+  unique()
+
+cryptos_periods[order(cryptos_periods$From),] %>% 
+  kbl(col.names= (c("Name", "Symbol", "From", "To", "Days of historic")),
+                        booktabs = TRUE, linesep = "", caption = 'Historic intervals') %>% 
+  kable_styling(latex_options = c("striped","HOLD_position"))
+```
+
+
+\pagebreak
+
+## Exploration Data Analysis
+
+###  Variables correlations
+
+An overview of the correlation plot shows a multicollinearity between the price-related variables High, Low, Open and Close. These variables are less correlated to Volume and Marketcap.
+```{r  Overview, echo= FALSE, fig.width=9, fig.height=6, fig.align="center", fig.cap="Variables correlations"}
+# Correlation Num columns
+df <- cryptos[,-1] %>% 
+  select_if(is.numeric)
+# install.packages("corrplot")
+corrplot.mixed(cor(df),
+               lower = "number", 
+               upper = "ellipse",
+               bg="black",
+               tl.col = "black") 
+
+# If bivariate only one  in the 4 (High, Low, Open, Close) can be used for 3 othere
+
+```
+
+\pagebreak
+
+### Variables over time
+
+```{r , echo= FALSE, VolumeOverYear, fig.show="hold", out.width="70%", fig.align="center"}
+#--- Volume per year
+span <- 60/ as.numeric(diff(range(cryptos$Date)))
+fit <- cryptos  %>%  
+  mutate(x = as.numeric(Date)) %>% 
+  loess(Volume ~ x, data = ., span = span, degree = 2)
+
+cryptos %>%  
+  mutate(smooth = predict(fit, as.numeric(Date)), day = yday(Date), 
+         year = as.character(year(Date))) %>%
+  ggplot(aes(day, smooth, col = year)) +
+  geom_line(lwd = .8) +
+  ggtitle("Volume per year") +
+  xlab("Year") +
+  ylab("Volume") +
+  theme(plot.title = element_text(color="steelblue", size=14, face="bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=11, face="bold"),
+        axis.title.y = element_text(color="steelblue", size=11, face="bold"))
+
+rm(fit)
+```
+.
+```{r , echo= FALSE, VolumeOverTime, fig.show="hold", out.width="50%", fig.cap= "Volume Over Time"}
+#--- Volume per day of the week
+cryptos %>% 
+  mutate(Day = factor(weekdays(Date))) %>%
+  group_by(Day) %>% 
+  summarize(n=n(), mv=mean(Volume)) %>%
+  mutate(NoDay= recode(Day, "Monday"= 1, "Tuesday"= 2, "Wednesday"= 3, "Thursday"= 4, 
+                            "Friday"= 5, "Saturday"= 6, "Sunday"= 7)) %>%
+  mutate(Day= reorder(Day, NoDay)) %>%
+  ggplot(aes(Day, mv)) +
+  geom_bar(stat = "identity", fill= "steelblue", width= 0.7) +
+  ggtitle("Volume per day") +
+  xlab("Day") +
+  ylab("Volume") +
+  theme(plot.title = element_text(color="steelblue", size=20, face="bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=14, face="bold"),
+        axis.title.y = element_text(color="steelblue", size=14, face="bold")) 
+
+#--- Volume per month of the year
+cryptos %>% 
+  mutate(Month= month(Date)) %>%
+  group_by(Month) %>% 
+  summarize(n= n(), mv= mean(Volume)) %>%
+  mutate(Nmonth = recode(Month, "1" = "JAN", "2" = "FEB", "3" = "MAR", "4" = "APR", 
+                                "5" = "MAY", "6" = "JUN", "7" = "JUL", "8" = "AUG", 
+                                "9" = "SEP", "10" = "OCT", "11" = "NOV", "12" = "DEC"))  %>%
+  mutate(Nmonth= reorder(Nmonth, Month)) %>%
+  ggplot(aes(Nmonth, mv)) +
+  geom_bar(stat = "identity", fill= "steelblue", width= 0.7) +
+  ggtitle("Volume per month") +
+  xlab("Months") +
+  ylab("Volume") +
+  theme(plot.title = element_text(color="steelblue", size=20, face="bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=14, face="bold"),
+        axis.title.y = element_text(color="steelblue", size=14, face="bold")) 
+```
+Observing fig.2, it appears clearly a higher volume since 2019, a slightly lower volume over the weekend and a larger volume over the first semester:
+
+\pagebreak
+
+### Variable over currencies
+
+I intend to see which currencies had more impact in the market:
+
+```{r , echo= FALSE, Importance, fig.show="hold", out.width="50%", fig.cap='Importance of currencies in market'}
+
+#--- Importance: Time series
+TopMkt <- cryptos %>%
+            group_by(Name) %>%
+            summarise(Date= Date, Marketcap = Marketcap, Symbol=Symbol,
+                      max_mc= max(Marketcap)) %>%
+            filter(max_mc == Marketcap) %>%
+            arrange(desc(max_mc)) %>%
+            head(3)   
+
+cryptos %>% 
+  ggplot(aes(Date, Marketcap,  color= Name)) +
+   labs(title= "Market Capitalisation vs Time",
+         x = "Time",
+         y = "Market Capitalisation") +
+  theme(plot.title = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=11, face= "bold"),
+        axis.title.y = element_text(color="steelblue", size=11, face= "bold")) +
+  geom_line() +
+  geom_label_repel(data= TopMkt, aes(label = Name), 
+                   nudge_x = 1, na.rm = TRUE) +
+  theme(legend.position = "none")
+
+#--- Importance: barplot
+# Regularised relative to period
+dat <- cryptos %>%
+  group_by(Name) %>%
+  mutate(elapse= as.numeric(diff(range(Date)))) %>%
+  summarise(elapse= max(elapse)) 
+
+  mean_elapse <- mean(dat$elapse) # Maximum of elapse time
+
+ cryptos %>%
+   mutate(elapse= as.numeric(diff(range(Date)))/mean_elapse,    # Regularisation
+          Symbol= Symbol) %>% 
+   group_by(Name) %>%
+   summarise(med_mc= median(Marketcap) * elapse) %>%
+   arrange(desc(med_mc)) %>% 
+   mutate(Name= reorder(Name, med_mc)) %>%
+   ggplot(aes(Name, med_mc, fill= Name)) + 
+   labs(title= "Market capitalisation Share",
+         x = "Currency",
+         y = "Market Capitalisation") +
+   theme(plot.title  = element_text(color="steelblue", size=14, face= "bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=11, face= "bold"),
+        axis.title.y = element_text(color="steelblue", size=11, face= "bold")) +
+   geom_bar(stat = "identity") + #fill= "steelblue") +
+   coord_flip() +
+   theme(legend.position = "none")
+```
+
+
+
+Bitcoin, Ethereum, and XRP influence the most the market capitalization. Bitcoin is by far the most influent making it one of the most widely accepted and accessible cryptocurrencies on the market.
+
+
+[Bitcoin](https://www.bitcoin.com/) was invented in 2009, and is the world's oldest and best-known cryptocurrency.
+It is a digital currency which operates free of any central control or the oversight of banks or governments. Instead it relies on peer-to-peer software and cryptography.
+
+[Ethereum](https://ethereum.org/en/) is one of the most popular cryptocurrencies in the world and a viable contender for the Bitcoin throne. Ethereum takes much of what Bitcoin offers and improves upon it with faster transactions, smart contracts and native apps.
+
+In the world of cryptocurrencies, [XRP](https://ripple.com/xrp/) is quite different. It is decentralized, but not as much as Bitcoin, Ethereum, and the likes. Unlike them, it doesn’t seek to be an alternative to the traditional banking system but rather to collaborate and improve the conventional banking system. Nonetheless, it is a cryptocurrency.
+
+\pagebreak
+
+### Attractiveness and outliers
+
+The article *The Confusions between Capitalization and Trading Volume[@cb-c-td]* mentions that
+
+*'You will have a better overview of the market and the coin itself when determining some information as well as the close connection between Capitalization and Trading Volume.'*\  
+
+To mitigate this confusion and get a better overview I made a connection between Capitalization and Trading Volume by defining the currency attractiveness ratio:
+\begin{center}
+$$Attractiveness  =  Volume/Marketccap$$
+\end{center}
+
+The evolution of the attractiveness over time:\   
+\   
+
+```{r GraphPriceVsTime, echo= FALSE, out.width="70%", fig.align="center"}
+# Attractiveness vs Date/Time
+cryptos %>% 
+  filter(Marketcap != 0 & Volume != 0) %>%
+  ggplot(aes(Date, Volume/Marketcap,  color= Name)) +
+  labs(title= "Attractiveness vs Time",
+        x   = "Date",
+        y   = "Attractiveness") +
+  theme(plot.title   = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=11, face= "bold"),
+        axis.title.y = element_text(color="steelblue", size=11, face= "bold")) +
+  geom_line() +
+  theme(legend.position = "none")
+
+```
+Despite the variations of attractiveness are somehow limited, we can observe some outliers. Outliers are high points that will result in over reactions in a forecast computation. Therefore, spot outliers and smooth them out will allow a better forecast. I intend to implement the automation of their detection and cleaning as described in *Data science for supply chain forecast[@ds-scm]*. As algorithm uses the standard deviation around the historical average it must be applied to a normal distribution. So, I will check that the errors to the mean of attractiveness is distributed normally (See below fig. \ref{fig:NormalGraphError})
+
+\pagebreak
+
+For the ability to apply the algorithm, I had to apply the logarithm transformation to the feature attractiveness.\   
+For the clarity of the graphs, I filtered the historical data of Bitcoin over the years 2014 to 2017:
+
+```{r AttractLogScaledNoExec, eval=FALSE}
+LogAttract <- cryptos %>% 
+# Subset data: Bitcoin history for 2014 and 2015
+   filter(Symbol== "BTC" & Year %in% c("2014":"2017") ) %>%
+   mutate(Value= Volume/Marketcap) %>% 
+  .$Value %>%
+  log()         # Log transformation
+# Histogram
+hist(LogAttract)
+```
+
+
+```{r PriceLogScaled, echo= FALSE, out.width="80%"}
+# Vector
+attractiveness_log_scaled <- cryptos %>% 
+# Subset data: Bitcoin history for 2014 and 2015
+   filter(Symbol== "BTC" & Year %in% c("2014":"2017") ) %>%
+   mutate(Value= Volume/Marketcap) %>% 
+  .$Value %>%
+  log()   # Log transformation
+
+# Dataframe
+crypto_attract <- cryptos %>% 
+  filter(Symbol== "BTC"  & Year %in% c("2014":"2017") ) %>%
+  mutate(LogAttract= log(Volume/Marketcap))
+```
+
+
+```{r, echo= FALSE, NormalLogAttract, fig.show="hold", out.width="80%", fig.align="center", fig.cap='Log-transformed attractiveness distribution'}
+# Histogram
+crypto_attract %>% 
+        ggplot(aes(x= attractiveness_log_scaled)) + 
+        geom_histogram( aes(y=..density..), position= "identity", binwidth= 0.05, 
+                        color= "black", fill="steelblue") +
+        geom_density(aes(y=..density..),alpha = 0.2, bw = 0.3, position = "stack", 
+                     fill= "steelblue", color= "blue") +
+        labs(title= "Attractiveness distribution",
+             subtitle = "Log transformed",
+             x = "log(Attractiveness)",
+             y = "") +
+        theme(plot.title    = element_text(color="steelblue", size=14, face= "bold", hjust = 0.5),
+              plot.subtitle = element_text(color="steelblue", size=14, face= "italic", hjust = 0.5),
+              axis.title.x  = element_text(color="steelblue", size=11, face= "bold"),
+              axis.title.y  = element_text(color="steelblue", size=11, face= "bold")) +
+        theme(legend.position = "none")
+```
+The distribution of the attractiveness is approximately normal.That is quite a good sign as the approach is to look at the atttractiveness standard deviation around the historical average and exclude the values that are exceptionally far from the average. 
+Let's define the attractivess standard deviation:
+$$\sigma  =  \sqrt{\frac{1}{n}\sum~{(Attractiveness - Average)^2} }$$
+To check the distribution around the average (i.e the error) is normally distributed (See fig. \ref{fig:NormalGraphError} below), let's go through the steps of the algorithm:
+
+\pagebreak
+
+* **Start**:  Subset the historical data and log-transformed the variable attractiveness:
+$$LogAttract = log(Attractiveness)$$
+Then, apply the algorithm to the transformed variable\  
+
+* **Step 1**: Calculate a naïve forecast that equals the average of the attractiveness by day of the year\     
+
+* **Step 2**: Compute the error:
+$$error = AttractLogScaled - mean(AttractLogScaled )$$
+then the average and standard deviation of the error.
+
+```{r StepsOutliers01, echo= TRUE}
+#- Data subset
+crypto_attract <- cryptos %>%
+  filter(Symbol== "BTC" &           # Bitcoin 
+         Year  %in% c(2014:2017) &  # 2014:2017
+         Marketcap !=0  & Volume != 0) %>% 
+  mutate(Day= yday(Date),
+         LogAttract= log(Volume/Marketcap)) # log(Attractiveness)
+
+#- Step 1 - Populate a naive forecast as an average of the historical attractiveness
+#           by day of the year
+crypto_avgattract <-  crypto_attract %>%
+                      group_by(Day) %>%
+                      summarise(AvgLogAttract= mean(LogAttract)) %>%
+                      mutate(Year= "Avg")
+
+#- Step 2 - Compute the error, then the mean and standard deviation of the error
+error <- crypto_attract %>% 
+  right_join(crypto_avgattract, by= "Day") %>%
+  mutate(error=  LogAttract - AvgLogAttract) %>%
+  .$error
+
+m1 <- mean(error)     # Average
+s1 <- sd(error)       # Standard deviation
+```
+
+
+Checking out the QQ-plot below it becomes reasonable to consider the error is normally distributed, that means the historical attractiveness is actually normally distributed around its average. 
+
+```{r , echo= FALSE, NormalGraphError, fig.show="hold", out.width="50%", fig.cap=' Error distribution'}
+# Histogram
+crypto_attract %>% 
+  right_join(crypto_avgattract, by= "Day") %>%
+  mutate(error=  LogAttract - AvgLogAttract)  %>%
+#       Graph
+        ggplot(aes(x= error)) + 
+        geom_histogram( aes(y=..density..), position= "identity", binwidth= 0.05, 
+                        color= "black", fill="steelblue") +
+        geom_density(aes(y=..density..),alpha = 0.2, bw = 0.3, position = "stack", 
+                     fill= "steelblue", color= "blue") +
+        labs(title= "Error distribution",
+             x = "Error",
+             y = "Frequeny") +
+        theme(plot.title    = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+              plot.subtitle = element_text(color="steelblue", size=14,  face= "italic", hjust = 0.5),
+              axis.title.x  = element_text(color="steelblue", size=11, face= "bold"),
+              axis.title.y  = element_text(color="steelblue", size=11, face= "bold")) +
+        theme(legend.position = "none")
+
+# QQ-plot
+prob <- 0.97
+error %>% 
+# Graph
+  ggqqplot(conf.int.level = prob, color= "steelblue") +
+          labs(title= "QQ-Plot",
+              subtitle = "Price log transformed") +
+          theme(plot.title    = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+                plot.subtitle = element_text(color="steelblue", size=14,  face= "italic", hjust = 0.5))
+```
+
+\pagebreak 
+
+Therefore, we can use the standard deviation and compute the probability for the attractiveness to be below an upper limit.
+
+```{r , echo= FALSE, NormalGraph, fig.show="hold", out.width="70%", fig.align= "center", fig.cap=''}
+
+normal_area <- function(mean = 0, sd = 1, lb, ub, acolor = "lightgray", ...) {
+    x <- seq(mean - 3 * sd, mean + 3 * sd, length = 100) 
+    
+    if (missing(lb)) {
+       lb <- min(x)
+    }
+    if (missing(ub)) {
+        ub <- max(x)
+    }
+
+    x2 <- seq(lb, ub, length = 100)    
+    plot(x, dnorm(x, mean, sd), type = "n", ylab = "")
+   
+    y <- dnorm(x2, mean, sd)
+    polygon(c(lb, x2, ub), c(0, y, 0), col = acolor)
+    lines(x, dnorm(x, mean, sd), type = "l", ...)
+}
+m <- m1
+s <- s1
+x <- pnorm(1.5, mean = m, sd = s, lower.tail = FALSE) # 0.0668072
+
+normal_area(mean = m, sd = s, lb = 1.5, lwd = 2,
+            acolor = rgb(0, 0, 1, alpha = 0.5))
+arrows(0, 0.1, 1.45, 0, lwd = 2, length = 0.2)
+text(0, 0.13, paste0("upper limit = ", round(m1+qnorm(0.97,m1,s1),2)) ,cex = 1)
+text(1.7, 0.03, "1.5%", cex = 1, col = "yellow")
+```
+\pagebreak
+
+* **Step 3**: Compute the upper acceptable limit from the error mean and standard deviation.\  
+
+* **Step 4**: Identify the outliers.
+Note that the upper limit just calculated in step 3 is based on parameters (mean & sigma) that uses the outliers themselves. These outliers increase the error variation so that the upper limit is biased and over estimated. To adjust this, one could exclude the outliers just identified to recompute the error distribution mean and standard deviation, then the upper limit\  
+*Note I do not correct far low values. Since the data is log transformed low outliers are actually next to null values in the original set and therefore do not request to be adjusted.*\  
+
+* **Step 5**:  Recompute the error distribution average and standard deviation without the outliers we just detected.\  
+
+* **Step 6**: Update the upper limit based on the new values of the average and the standard deviation
+
+* **Step 7**: Update the outliers based on the new upper limit and set their values to upper limit.\  
+```{r StepsOutliers02, echo= TRUE}
+# Step 3  - Set upper limit that implies the error has 1.5% chance to be higher
+prob <- 0.97
+quant1 <- qnorm(prob, m1, s1)                              # Quantile
+upper_limit <- crypto_avgattract$AvgLogAttract + quant1    # Upper limit = Average + quantile(0.97)
+
+#- Step 4 -  Indentify outliers i.e for which error is greater than the upper limit
+ind_outliers <- which(error > quant1)
+
+#- Step 5 - Recompute error distribution parameters excluding outliers
+m2 <- mean(error[-ind_outliers])      # Average excluding outliers
+s2 <- sd(error[-ind_outliers])        # Standard deviation excluding outliers
+
+#- Step 6 - Update the upper limit with the new average and standard deviation
+quant2 <- qnorm(prob, m2, s2)                          # Quantile
+upper_limit <- crypto_avgattract$AvgLogAttract + quant2    # Upper limit = Average + quantile(0.97)
+
+#- Step 7 - Update the outliers based on the new upper limit
+ind_outliers <- which(error > quant2)
+crypto_updattract <- crypto_attract 
+crypto_updattract$LogAttract[ind_outliers] <- upper_limit
+```
+
+\pagebreak
+
+Below is the result of the algorithm that shows outliers of bitcoin historical data over year 2014 to 2017
+
+```{r, echo= FALSE, GraphUpdPrices, fig.show="hold", out.width="50%", fig.cap='Loged Attractiveness distribution'}
+
+crypto_attract %>% 
+  filter(Year== 2014:2017) %>%
+  select(Day, LogAttract, Year) %>% 
+  rbind(crypto_avgattract %>% 
+          mutate(AvgLogAttract= upper_limit) %>% 
+          rename(LogAttract= AvgLogAttract)
+        ) %>% 
+  ggplot(aes(Day, LogAttract, color = Year)) +
+  geom_line() +
+#  ylim(4, 8) +
+  labs(title   = "Bitcoin Attractiveness",
+       subtitle= "With outliers",
+             x = "Day",
+             y = "Price") +
+   theme(plot.title    = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+              plot.subtitle = element_text(color="steelblue", size=14,  face= "italic", hjust = 0.5),
+              axis.title.x  = element_text(color="steelblue", size=11, face= "bold"),
+              axis.title.y  = element_text(color="steelblue", size=11, face= "bold")) +
+    theme(legend.position = "none")
+
+crypto_updattract %>% 
+  filter(Year== 2014:2017) %>%
+  select(Day, LogAttract, Year) %>% 
+  rbind(crypto_avgattract %>% 
+          mutate(AvgLogAttract= upper_limit) %>% 
+          rename(LogAttract= AvgLogAttract)
+        ) %>% 
+  ggplot(aes(Day, LogAttract, color = Year)) +
+  geom_line() +
+#  ylim(4, 8) +
+  labs(title   = "Bitcoin Attractiveness",
+       subtitle= "Smoothed outliers",
+             x = "Day",
+             y = "Price") +
+   theme(plot.title    = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+              plot.subtitle = element_text(color="steelblue", size=14,  face= "italic", hjust = 0.5),
+              axis.title.x  = element_text(color="steelblue", size=11, face= "bold"),
+              axis.title.y  = element_text(color="steelblue", size=11, face= "bold")) 
+
+```
+
+
+Then, are noticeable the outliers in 2017. Transforming the data back to its original scale is done by applying the exponential to LogAttract:
+$$Attractiveness = exp(log(Attractiveness)) = exp(LogAttract)$$
+The following graph compares the attractivemes with vs witout outliers. We show the results on the subset to 2014 to 2017
+```{r , echo= FALSE, GraphCompareOutliers, fig.show="hold", out.width="50%", fig.cap='Outliers management'}
+crypto_attract %>% 
+  filter(Year== "2017") %>%
+  select(Day, LogAttract, Year) %>% 
+  mutate(Price= exp(LogAttract)) %>%
+  ggplot(aes(Day, Price, color = Year)) +
+  geom_line() +
+  labs(title   = "Bitcoin Attractiveness",
+       subtitle= "With outliers",
+             x = "Day",
+             y = "Price") +
+   theme(plot.title    = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+              plot.subtitle = element_text(color="steelblue", size=14,  face= "italic", hjust = 0.5),
+              axis.title.x  = element_text(color="steelblue", size=11, face= "bold"),
+              axis.title.y  = element_text(color="steelblue", size=11, face= "bold")) +
+    theme(legend.position = "none")
+
+
+crypto_updattract %>% 
+  filter(Year== "2017") %>%
+  select(Day, LogAttract, Year) %>% 
+  mutate(Price= exp(LogAttract)) %>%
+  ggplot(aes(Day, Price, color = Year)) +
+  geom_line() +
+  ylim(0, 0.100) +
+    labs(title   = "Bitcoin Attractiveness",
+       subtitle= "Without outliers",
+             x = "Day",
+             y = "Price") +
+   theme(plot.title    = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+              plot.subtitle = element_text(color="steelblue", size=14,  face= "italic", hjust = 0.5),
+              axis.title.x  = element_text(color="steelblue", size=11, face= "bold"),
+              axis.title.y  = element_text(color="steelblue", size=11, face= "bold")) 
+
+```
+
+\pagebreak 
+
+We apply the algorithm to smooth the outliers out to the result below: 
+
+```{r , echo= FALSE, GraphCompareOutliersAllData, fig.show="hold", out.width="50%", fig.cap='Outliers management - Full data'}
+Intervals <- list(period_1= 2013:2017,
+                  period_2= 2018:2021)
+
+
+AttractSmooth <- sapply(Intervals, function(period) { 
+#-------------------------------------------------------------------------------------
+prob <- 0.98
+  
+crypto_attract <- cryptos %>%
+  filter(Marketcap != 0 &  
+         Volume!= 0 &  
+         Year  %in% period ) %>% 
+  mutate(Day= yday(Date),
+         LogAttract= log(Volume/Marketcap)) # log(Attractiveness)
+
+crypto_avgattract <-  crypto_attract %>%
+  group_by(Symbol, Day) %>%
+  summarise(AvgLogAttract= mean(LogAttract)) %>%
+  mutate(Year= "Avg")
+
+#- Step 2 - Compute the error, then the mean and standard deviation of the error
+error <- crypto_attract %>% 
+  right_join(crypto_avgattract, by= c("Symbol","Day")) %>%
+  mutate(error=  LogAttract - AvgLogAttract) %>%
+  .$error
+
+m1 <- mean(error)     # Average
+s1 <- sd(error)       # Standard deviation
+
+# Step 3  - Set upper limit that implies the error has 1.5% chance to be higher
+
+quant1 <- qnorm(prob, m1, s1)                              # Quantile
+upper_limit <- crypto_avgattract$AvgLogAttract + quant1    # upper limit
+
+#- Step 4 -  Indentify outliers i.e for which error is greater than the upper limit
+ind_outliers <- which(error > quant1)
+
+#- Step 5 - Recompute error distribution parameters excluding outliers
+m2 <- mean(error[-ind_outliers])      # Average excluding outliers
+s2 <- sd(error[-ind_outliers])        # Standard deviation excluding outliers
+
+#- Step 6 - Update the upper limit with the new average and standard deviation
+quant2 <- qnorm(prob, m2, s2)                              # Quantile
+upper_limit <- crypto_avgattract$AvgLogAttract + quant2    # Upper limit
+
+#- Step 7 - Update the outliers based on the new upper limit
+ind_outliers <- which(error > quant2)
+crypto_updattract <- crypto_attract 
+crypto_updattract$LogAttract[ind_outliers] <- upper_limit
+
+exp(crypto_updattract$LogAttract)
+
+    } # function(period)
+#-------------------------------------------------------------------------------------
+) # sapply 
+
+#--- Attractiveness with outliers
+cryptos %>% 
+  filter(Marketcap!= 0 & 
+         Volume!= 0) %>%
+  ggplot(aes(Date, Volume/Marketcap,  color= Name)) +
+  labs(title= "Attractiveness vs Time",
+       x   = "Date",
+       y   = "Attractiveness") +
+  theme(plot.title   = element_text(color="steelblue", size=14, face= "bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=11, face= "bold"),
+        axis.title.y = element_text(color="steelblue", size=11, face= "bold")) +
+  geom_line() +
+  ylim(0, 20) +
+  theme(legend.position = "none")
+
+
+#--- Attractiveness outliers smoothed out
+cryptos %>% 
+  filter(Marketcap!= 0 & Volume!= 0) %>% 
+  bind_cols(UpdAttract= unlist(AttractSmooth)) %>% 
+  ggplot(aes(Date, UpdAttract,  color= Name)) +
+  labs(title= "Attractiveness vs Time",
+       x   = "Date",
+       y   = "Attractiveness") +
+  theme(plot.title   = element_text(color="steelblue", size=14,  face= "bold", hjust = 0.5),
+        axis.title.x = element_text(color="steelblue", size=11, face= "bold"),
+        axis.title.y = element_text(color="steelblue", size=11, face= "bold")) +
+  geom_line() +
+  ylim(0, 20) +
+  theme(legend.position = "none")
+
+
+```
+\  
+The outliers has been smoothed out so that the forecast can be computed without the variation they might introduced.\   
+
+\pagebreak
+
+# Forecast
+
+Traditional statistical models use a predefined relationship (model) and apply it to populate a forecast (attractiveness or price) based on historical data. Whereas a machine learning algorithm will not assume *à priori* a particular relationship like seasonality or a linear trend. It will *learn* these patterns from the historical data. As a first machine learning algorithm, we will use a decision tree. 
+However, none of this means that we can’t build useful algorithms that are much better than guessing, and in some cases better than expert opinions.
+
+## Forecast error measure
+
+In Hyndman's article[@HYNDMAN2006679], we can read that *'historically, the RMSE and MSE have been popular, largely because of their theoretical relevance in statistical modeling.'* Conveniently, we also detected and smoothed out the outliers so that the RMSE and  MSE sensitivity to outliers will shrunk. The same article also concludes that MASE is widely applicable in our current configuration, that yet requires a [Naive forecast].
+
+**RMSE** (Root Mean Suare Error) is calculated as below:
+
+$$RMSE ~ = ~ \sqrt{\frac{1}{N}\sum ~ {(Predicted - True)}^2}$$
+
+**MASE** (Mean Absolute Scaled Error) is calculated from MAE (Mean Absolute Error)
+
+$$MAE ~ = ~ \frac{1}{N}\sum ~ {|Predicted - True|}$$
+scaled to the [Naive Forecast] Mean Absolute Error:
+$$MASE ~ = ~ \frac{MAE}{MAE_{Naive}}$$
+
+```{r ErrorMeasureFunctions}
+#--- RMSE
+RMSE <- function(true, predicted){
+  sqrt(mean((true - predicted)^2))
+}
+#--- MAE
+MAE <- function(true, predicted){
+  sum(abs(true-predicted))/length(true)
+}
+#--- MASE
+MASE <- function(mae_model, mae_naive){
+  mae_model/mae_naive
+}
+```
+
+\pagebreak
+
+Mathematical optimisation shows that a good forecast of the mean will generate a good RMSE and a good forecast of the median  will output a small MAE (and MASE). The approach below will prove this by seeking the minimum of the mathematical function when their derivartive is set to zero:
+
+**RMSE**
+
+$$\displaystyle \frac{\partial RMSE}{\partial pred} = {\frac{1}{2}}{\frac{\partial \frac{1}{n} \sum(pred_{t} - true_{t})^2}{\partial pred}}$$
+
+$$\frac{1}{n} \sum(pred_{t}-true_{t})=0$$
+
+$$\sum {pred_{t}}=\sum{true_{t}}$$
+
+Therefore, to optimise a forecast RMSE, the model means that the total predicted is equal to the total true values. To say it an other way, optimising RMSE aims to produce a prediction that is correct *on average* and so, unbiased.\   
+
+**MASE**
+
+$$\frac{\partial MASE}{\partial pred}= 0$$
+
+is equivalent to
+
+$$\frac{1}{Naive} * \frac{\partial \frac{1}{n} \sum(pred_{t} - true_{t})}{\partial pred} = 0$$
+
+When aknowledging the following
+
+$$\frac{\partial |pred_t-true_{t}|}{\partial pred} = 1 ~ if ~ true_{t} < pred_{t}$$
+and
+$$\frac{\partial |pred_t-true_{t}|}{\partial pred} =-1 ~ if ~ true_t > pred_{t}$$
+
+the derivative of MAE becomes
+
+$$\frac{\partial MAE}{\partial pred} = \frac{1}{n}\sum 1~ if~ true_{t}<pred_{t} ~ or ~  -1~ if~ true_{t}>pred_{t}$$
+
+Therefore, optimising MAE (i.e derivative = 0), the predicted values need to be as many times higher 
+than the true values as it is lower than the true values. That means the data set is split into to equal parts, which is the definition of the median.
+
+\pagebreak
+
+## Data preparation
+
+The variable *Attractiveness* was computed in [Attractiveness and outliers] and will be predicted.
+Therefore, the feature is added to the data set.\   
+Also, some currencies has not much historical data (See table \ref(tab:Historic intervals)). To run a machine able to learn and mitigate the variablity these currencies would introduce, the ones with less than 2 years of historical data are filtered out:
+
+```{r DataPreparation, echo= TRUE, eval=FALSE}
+cryptos_feat <- cryptos %>% 
+  bind_cols(Attractiveness= unlist(AttractSmooth)) %>% # Outliers smoothed out
+  filter(Duration > 800)  # More than 800 days (~2 years) of historical data
+```
+\  
+.
+
+```{r FilterCryptos, echo=FALSE}
+cryptos_feat <- cryptos %>% 
+  left_join(cryptos_periods) %>%
+  select(-c(From,To)) %>%
+  filter(Marketcap!= 0 & Volume!= 0) %>% # & Symbol!= "BTC") %>% 
+  bind_cols(Attractiveness= unlist(AttractSmooth)) %>% # Outliers smoothed out
+  filter(Duration > 800)  
+```
+\   
+We have to convert the time series data to a machine learning one by creating features from the time variable. In the code below, I create time features like day of the year, month, quarter, and year.
+
+```{r CryptosExtent1, echo= TRUE}
+cryptos_feat <- cryptos_feat %>%
+  mutate(Day     = as.factor(yday(Date)),
+         Month   = as.factor(month(Date)),
+         Quarter = as.factor(quarter(Date)),
+         Year    = as.factor(year(Date)))
+```
+\  
+
+Fig. \ref{fig:VolumeOverTime} that hilighted a lower traded volume during the weekends and the second semester suggests some specific time features. consequently, the features weekend and semester will help fitting the data when using machine learning:
+```{r CryptosExtent2, echo= TRUE}
+cryptos_feat <- cryptos_feat %>%
+  mutate(Weekdays = as.factor(weekdays(Date)),
+         Weekend  = as.factor(if_else(Weekdays %in% c("Saturday", "Sunday") , 1, 0)),
+         Semester = as.factor(if_else(Quarter %in% c("1", "2"),  1, 2))) %>%
+  select(Symbol, Name, Low, Volume, Attractiveness, Volume, Day,
+         Weekend, Month, Semester, Year, Date)
+```
+
+\pagebreak
+
+## Machine learning
+
+In order to make a forecast, the machine learning algorithm should answer the following question:\   
+*Based on the variable over the last n periods, what will the variable (price or attractiveness) be during the next period(s)?* \   
+
+To answer this question:\   
+
+* The algorithm is fed with the dataset prepared in chapter [Data preparation] and that contains the currencies with more than 2 years of historical data.
+* With no préjugés, some machine learning algorithms from different family will be tested:
+    + linear from the regression family as the naïve model
+    + Kernel Nearest Neighbors (KNN) as clustering tool
+    + Tree regression and random forest from comonly used for classification
+    + Principal Component Analysis (PCA) from dimensinality reduction family
+
+The data partition aimed to forecast a period of 6 months. That's defined a reasonable period of time to *learn* about a potential seasonality for the currencies with more than 2 years of historical data:
+```{r partition}
+set.seed(1997, sample.kind="Rounding")
+
+cryptos_feat <- cryptos_feat %>% filter(Year== 2013:2021) 
+# Validation partition
+feat_set  <- cryptos_feat %>% filter(Date <  "2021-01-01") 
+valid_set <- cryptos_feat %>% filter(Date >= "2021-01-01") 
+
+# Test partition
+train_set <- feat_set %>% filter(Date <  "2020-06-01") 
+test_set  <- feat_set %>% filter(Date >= "2020-06-01") 
+
+```
+
+\pagebreak
+
+## Forecast
+
+The usage of the package *caret* allows similar codings for the different algorithms.
+
+### Naive forecast 
+
+The naive forecast will be the linear regression:
+```{r, echo= TRUE, eval= FALSE}
+# Train a linear model to predict "Low" price
+fit_low_lm <- lm(Low ~ Volume+Day+Weekend+Month+Semester+Year, 
+                 data = train_set)
+
+# Train a linear model to predict Attractiveness
+fit_attract_lm <- lm(Attractiveness ~ Low+Volume+Day+Weekend+Month+Semester+Year, 
+                     data = train_set)
+```
+
+```{r LinearRegression, echo= FALSE}
+
+#----------------------------------------
+#--- Price 
+#----------------------------------------
+# Train a linear model to predict "Low" price
+fit_low_lm <- lm(Low ~ Volume+Day+Weekend+Month+Semester,
+                data = train_set)
+# Generate predictions on the test set
+  predicted_low <- predict(fit_low_lm, data= test_set)
+# KPIs  
+  low_naive_rmse <- RMSE(test_set$Low, predicted_low)
+  low_naive_mae  <- MAE(test_set$Low, predicted_low)
+  low_naive_mase <- MASE(low_naive_mae, low_naive_mae)
+
+#----------------------------------------
+#--- Attractiveness
+#----------------------------------------
+# Train a linear model to predict Attractiveness
+fit_attract_lm <- lm(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year, 
+          data = train_set)
+# Generate predictions on the test set
+  predicted_attractiveness <- predict(fit_attract_lm, data= test_set)
+  attract_naive_rmse <- RMSE(test_set$Attractiveness, predicted_attractiveness)
+  attract_naive_mae  <- MAE(test_set$Attractiveness, predicted_attractiveness)
+  attract_naive_mase <- MASE(attract_naive_mae, attract_naive_mae)
+  
+# Set KPIs 
+KPI_low_results <- data_frame(Model    = "MODEL 0",
+                           Description = "Naïve: Linear Regression",
+                           RMSE = low_naive_rmse,
+                           MAE  = low_naive_mae,
+                           MASE = low_naive_mase)
+
+KPI_attract_results <- data_frame(Model  = "MODEL 0",
+                           Description   = "Naïve: Linear Regression",
+                           RMSE = attract_naive_rmse,
+                           MAE  = attract_naive_mae,
+                           MASE = attract_naive_mase)
+```
+
+
+### KNN
+
+```{r, echo= TRUE, eval= FALSE}
+grid <- data.frame(k = seq(5, 25, 5))
+# Train a knn model to predict "Low" price
+fit_low_knn <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year, 
+                 data     = train_set,
+                 method   = "knn",
+                 tuneGrid = grid)
+
+# Train a knn model to predict Attractiveness
+fit_attract_knn <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year, 
+                     data     = train_set,
+                     method   = "knn",
+                     tuneGrid = grid)
+```
+
+
+
+```{r Knn, echo= FALSE}
+rm(fit_low_lm, fit_attract_lm)
+#----------------------------------------
+#--- Price 
+#----------------------------------------
+grid <- data.frame(k = seq(5, 25, 5))
+fit_low_knn <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year, 
+                 data= train_set,
+                 method = "knn",
+                 tuneGrid=grid)
+
+# Generate predictions 
+predicted_low <- predict(fit_low_knn, test_set)
+
+# Compute errors measures
+  low_knn_rmse <- RMSE(test_set$Low, predicted_low)
+  low_knn_mae  <- MAE(test_set$Low, predicted_low)
+  low_knn_mase <- MASE(low_knn_mae, low_naive_mae)
+
+# Store results
+  KPI_low_results <- bind_rows(KPI_low_results,
+                            data_frame(
+                           Model    = "MODEL 1",
+                           Description = "knn",
+                           RMSE = low_knn_rmse,
+                           MAE  = low_knn_mae,
+                           MASE = low_knn_mase) 
+                            ) 
+#----------------------------------------
+#--- Attractiveness  
+#----------------------------------------
+# Train a tree regression model to predict Attractiveness
+grid <- data.frame(k = seq(5, 25, 5))
+fit_attract_knn <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year, 
+                     data= train_set,
+                     method = "knn",
+                     tuneGrid=grid)
+
+# Compute errors measures
+  predicted_attractiveness <- predict(fit_attract_knn, test_set)
+  attract_knn_rmse <- RMSE(test_set$Attractiveness, predicted_attractiveness)
+  attract_knn_mae  <- MAE(test_set$Attractiveness, predicted_attractiveness)
+  attract_knn_mase <- MASE(attract_knn_mae, attract_naive_mae)
+  
+# Store results
+  KPI_attract_results <- bind_rows(KPI_attract_results,
+                            data_frame(
+                           Model    = "MODEL 1",
+                           Description = "knn",
+                           RMSE = attract_knn_rmse,
+                           MAE  = attract_knn_mae,
+                           MASE = attract_knn_mase) 
+                            )
+```
+
+
+### Regression tree
+```{r ShowTree, eval=FALSE}
+grid <- data.frame(cp = seq(0, 0.1, 0.01))
+# Train a tree model to predict "Low" price
+fit_low_rpart <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year, 
+                     data     = train_set,
+                     method   = "rpart",
+                     tuneGrid = grid)
+# Train a knn model to predict attractiveness
+fit_attract_rpart <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year, 
+                     data     = train_set,
+                     method   = "rpart",
+                     tuneGrid = grid)
+```
+
+
+```{r Tree, echo= FALSE, eval= TRUE}
+
+rm(fit_low_knn, fit_attract_knn, grid)
+#----------------------------------------
+#--- Price 
+#----------------------------------------
+grid <- data.frame(cp = seq(0, 0.1, 0.01))
+fit_low_tree <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year, 
+                     data= train_set,
+                     method = "rpart",
+                     tuneGrid=grid)
+
+# Generate predictions 
+predicted_low <- predict(fit_low_tree, test_set)
+
+# Compute errors measures
+  low_tree_rmse <- RMSE(test_set$Low, predicted_low)
+  low_tree_mae  <- MAE(test_set$Low, predicted_low)
+  low_tree_mase <- MASE(low_tree_mae, low_naive_mae)
+
+# Store results
+  KPI_low_results <- bind_rows(KPI_low_results,
+                            data_frame(
+                           Model    = "MODEL 2",
+                           Description = "Tree",
+                           RMSE = low_tree_rmse,
+                           MAE  = low_tree_mae,
+                           MASE = low_tree_mase) 
+                            ) 
+
+#----------------------------------------
+#--- Attractiveness  
+#----------------------------------------
+# Train a tree regression model to predict Attractiveness
+grid <- data.frame(cp = seq(0, 0.1, 0.01))
+fit_attract_tree <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year, 
+                     data= train_set,
+                     method = "rpart",
+                     tuneGrid=grid)
+
+# Compute errors measures
+  predicted_attractiveness <- predict(fit_attract_tree, test_set)
+  attract_tree_rmse <- RMSE(test_set$Attractiveness, predicted_attractiveness)
+  attract_tree_mae  <- MAE(test_set$Attractiveness, predicted_attractiveness)
+  attract_tree_mase <- MASE(attract_tree_mae, attract_naive_mae)
+  
+# Store results
+  KPI_attract_results <- bind_rows(KPI_attract_results,
+                            data_frame(
+                           Model    = "MODEL 2",
+                           Description = "Tree",
+                           RMSE = attract_tree_rmse,
+                           MAE  = attract_tree_mae,
+                           MASE = attract_tree_mase) 
+                            )
+```
+
+\pagebreak
+
+### Random forest
+
+```{r ShowRandomForest, eval= FALSE}
+# Train a random forest model to predict "Low" price
+fit_low_Rborist <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year,
+                method   = "Rborist",
+                tuneGrid = data.frame(predFixed = seq(33,45,2),
+                                      minNode   = seq(33, 45, 2)),
+                data     = train_set)
+# Train a random forest model to predict attractiveness
+fit_Attract_Rborist <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year,
+                method   = "Rborist",
+                tuneGrid = data.frame(predFixed = seq(33,45,2),
+                                      minNode   = seq(33, 45, 2)),
+                data     = train_set)
+```
+
+```{r RandomForest, echo= FALSE}
+
+rm(fit_low_tree, fit_attract_tree, grid)
+
+#----------------------------------------
+#--- Price
+#----------------------------------------
+# Train a tree regression model to predict Low price
+fit_low_Rborist <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year,
+                method= "Rborist",
+                tuneGrid= data.frame(predFixed= seq(33,45,2),
+                                    minNode= seq(33, 45, 2)),
+                data= train_set
+                )
+
+# Compute errors measures
+  predicted_Low <- predict(fit_low_Rborist, test_set)
+  low_rb_rmse <- RMSE(test_set$Low, predicted_Low)
+  low_rb_mae  <- MAE(test_set$Low, predicted_Low)
+  low_rb_mase <- MASE(low_rb_mae, low_naive_mae)
+
+  
+# Store results
+  KPI_low_results <- bind_rows(KPI_low_results,
+                            data_frame(
+                           Model    = "MODEL 3",
+                           Description = "Random forest",
+                           RMSE = low_rb_rmse,
+                           MAE  = low_rb_mae,
+                           MASE = low_rb_mase) 
+                            )
+  
+#----------------------------------------
+#--- Attractiveness  
+#----------------------------------------
+# Train a tree regression model to predict Attractiveness
+fit_attract_Rborist <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year,
+                method= "Rborist",
+                tuneGrid= data.frame(predFixed= seq(31, 39,2),
+                                     minNode= seq(31, 39, 10)),
+                data= train_set
+                )
+
+# Compute errors measures
+  predicted_attractiveness <- predict(fit_attract_Rborist, test_set)
+  attract_rb_rmse <- RMSE(test_set$Attractiveness, predicted_attractiveness)
+  attract_rb_mae  <- MAE(test_set$Attractiveness, predicted_attractiveness)
+  attract_rb_mase <- MASE(attract_rb_mae, attract_naive_mae)
+  
+# Store results
+  KPI_attract_results <- bind_rows(KPI_attract_results,
+                            data_frame(
+                           Model    = "MODEL 3",
+                           Description = "Random forest",
+                           RMSE = attract_rb_rmse,
+                           MAE  = attract_rb_mae,
+                           MASE = attract_rb_mase) 
+                            )
+  
+```
+
+
+```{r, echo= FALSE}
+rm(fit_low_Rborist, fit_attract_Rborist)
+
+```
+
+\pagebreak
+
+### Principal Components Analysis - PCA
+
+
+```{r ShowPCA, echa= TRUE, eval= FALSE}
+# Train a PCA model to predict Low price
+rctrl <- trainControl(method = "cv", number= 5, returnResamp = "all")
+fit_low_pca  <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year,
+                method= "pcr",
+                data= train_set,
+                trControl= rctrl,
+                preProc= c("center", "scale"),
+                tuneGrid= data.frame(ncomp= seq(1,10))
+                )
+summary(fit_low_pca)
+# Train a PCA  model to predict Attractiveness
+fit_attract_pca  <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year,
+                    method= "pcr",
+                    data= train_set,
+                    trControl= rctrl,
+                    preProc= c("center", "scale"),
+                    tuneGrid= data.frame(ncomp= seq(1,10))
+                    )
+summary(fit_attract_pca)
+```
+
+```{r PCA, echo= FALSE, eval= TRUE}
+
+rctrl <- trainControl(method = "cv", number= 5, returnResamp = "all")
+#----------------------------------------
+#--- Price
+#----------------------------------------
+# Train a PCA model to predict Low price
+fit_low_pca  <- train(Low ~ Volume+Day+Weekend+Month+Semester+Year,
+                method= "pcr",
+                data= train_set,
+                trControl= rctrl,
+                preProc= c("center", "scale"),
+                tuneGrid= data.frame(ncomp= seq(1,10))
+                    )
+
+predicted_low <- predict(fit_low_pca, test_set)
+
+# Compute errors measures
+  predicted_low <- predict(fit_low_pca, test_set)
+  low_pca_rmse <- RMSE(test_set$Low, predicted_low)
+  low_pca_mae  <- MAE(test_set$Low, predicted_low)
+  low_pca_mase <- MASE(low_pca_mae, low_naive_mae)
+
+  
+# Store results
+  KPI_low_results <- bind_rows(KPI_low_results,
+                            data_frame(
+                           Model    = "MODEL 5",
+                           Description = "PCA",
+                           RMSE = low_pca_rmse,
+                           MAE  = low_pca_mae,
+                           MASE = low_pca_mase) 
+                            )
+
+#----------------------------------------
+#--- Attractiveness  
+#----------------------------------------
+# Train a PCA  model to predict Attractiveness
+fit_attract_pca  <- train(Attractiveness ~ Low+Day+Weekend+Month+Semester+Year,
+                    method= "pcr",
+                    data= train_set,
+                    trControl= rctrl,
+                    preProc= c("center", "scale"),
+                    tuneGrid= data.frame(ncomp= seq(1,10))
+                    )
+
+predicted_attractiveness <- predict(fit_attract_pca, test_set)
+
+# Compute errors measures
+  predicted_attractiveness <- predict(fit_attract_pca, test_set)
+  attract_pca_rmse <- RMSE(test_set$Attractiveness, predicted_attractiveness)
+  attract_pca_mae  <- MAE(test_set$Attractiveness, predicted_attractiveness)
+  attract_pca_mase <- MASE(attract_pca_mae, attract_naive_mae)
+
+  
+# Store results
+  KPI_attract_results <- bind_rows(KPI_attract_results,
+                            data_frame(
+                           Model    = "MODEL 5",
+                           Description = "PCA",
+                           RMSE = attract_pca_rmse,
+                           MAE  = attract_pca_mae,
+                           MASE = attract_pca_mase) 
+                            )
+
+rm(fit_low_pca, fit_attract_pca)
+```
+
+
+\pagebreak
+
+# Results
+
+## Global
+
+
+```{r LowResults, echo= FALSE}
+KPI_low_results %>% kbl(booktabs = TRUE, linesep = "", caption = 'Price forecast error') %>% 
+                    kable_styling(latex_options = c("striped","HOLD_position"))
+```
+
+
+```{r AttractResults, echo= FALSE}
+KPI_attract_results %>% kbl(booktabs = TRUE, linesep = "", caption = 'Attractiveness forecast error') %>% 
+                    kable_styling(latex_options = c("striped","HOLD_position"))
+```
+\pagebreak
+## Case of XRP
+We additionally focused on XRP because:
+
+* It was one of the first crypto currencies in use as we can see in [Dataset]-table *Historic intervals*.
+* It is one the tree that has the biggestinfluence in the market (See fig. \ref{fig:NormalGraphError})
+* As I mentioned in chapter [Data preparation], it also does not seek to be an alternative to the traditional banking system but rather to collaborate and improve the conventional banking system.
+
+```{r, echo= FALSE}
+currencies <- list("XRP")
+data <- list(train= train_set, test= test_set )
+output <- lapply(currencies, function(currency, 
+                                      train_data = train_set,
+                                      test  = test_set) { 
+#--- Data partition
+
+  # Create datafreme for Price error measures
+  if (!exists("ResError")) {
+    ResError <- data.frame(Variable = character(),
+                           Currency= character(),
+                           Model= character(),
+                           Description= character(),
+                           RMSE = double(),
+                           MAE  = double(),
+                           MASE = double()
+                          )
+
+  }
+  currency = "XRP"
+l_train <- train_set %>% filter(Symbol== currency)
+l_test  <- test_set %>% filter(Symbol== currency)
+#----------------------------------
+#--- Forecast models
+#----------------------------------
+# MODELE 0: lm
+#----------------------------------
+#Price
+fit_low_lm <- lm(Low ~ Volume+Weekend+Month+Semester, 
+                 data = l_train)
+predicted_low <- predict(fit_low_lm, l_test)
+# KPIs  
+low_naive_rmse <- RMSE(l_test$Low, predicted_low)
+low_naive_mae  <- MAE(l_test$Low, predicted_low)
+low_naive_mase <- MASE(low_naive_mae, low_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                      data_frame( 
+                        Variable = "Low",
+                        Currency = currency,
+                        Model    = "MODEL 0",
+                        Description = "Naïve: Linear Regression",
+                        RMSE = low_naive_rmse,
+                        MAE  = low_naive_mae,
+                        MASE = low_naive_mase)
+)
+
+# Attractivenes
+fit_attract_lm <- lm(Attractiveness ~ Volume+Day+Weekend+Month+Semester,
+                               data = l_train)
+predicted_attract <- predict(fit_attract_lm, data= l_test)
+# KPIs
+attract_naive_rmse <- RMSE(l_test$Attractiveness, predicted_attract)
+attract_naive_mae  <- MAE(l_test$Attractiveness, predicted_attract)
+attract_naive_mase <- MASE(attract_naive_mae, attract_naive_mae)
+
+ResError <-  bind_rows(ResError,
+                       data_frame(
+                         Variable = "Attractiveness",
+                         Currency = currency,
+                         Model    = "MODEL 0",
+                         Description = "Naïve: Linear Regression",
+                         RMSE = attract_naive_rmse,
+                         MAE  = attract_naive_mae,
+                         MASE = attract_naive_mase)
+                       )
+
+#----------------------------------          
+# MODEL 1: knn
+#----------------------------------
+#--- Price
+grid <- data.frame(k = seq(5, 13, 2))
+fit_low_knn <- train(Low ~ Volume+Attractiveness+
+                           Weekend+Month+Semester+Year+Day,
+                     data     = l_train,
+                     method   = "knn",
+                     tuneGrid = grid)
+predicted_low <- predict(fit_low_knn, l_test)
+predicted_low_knn <- predicted_low
+
+# KPIs  
+low_knn_rmse <- RMSE(l_test$Low, predicted_low)
+low_knn_mae  <- MAE(l_test$Low, predicted_low)
+low_knn_mase <- MASE(low_knn_mae, low_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Low",
+                         Currency = currency,
+                         Model    = "MODEL 1",
+                         Description = "KNN",
+                         RMSE = low_knn_rmse,
+                         MAE  = low_knn_mae,
+                         MASE = low_knn_mase)
+                      )
+
+fit_attract_knn <- train(Attractiveness ~ Low+Volume+
+                                          Weekend+Month+Semester+Year+Day,
+                         data     = l_train,
+                         method   = "knn",
+                         tuneGrid = grid)
+predicted_attract <- predict(fit_attract_knn, l_test)
+
+# KPIs  
+attract_knn_rmse <- RMSE(l_test$Attractiveness, predicted_attract)
+attract_knn_mae  <- MAE(l_test$Attractiveness,  predicted_attract)
+attract_knn_mase <- MASE(attract_knn_mae, attract_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Attractiveness",
+                         Currency = currency,
+                         Model    = "MODEL 1",
+                         Description = "KNN",
+                         RMSE = attract_knn_rmse,
+                         MAE  = attract_knn_mae,
+                         MASE = attract_knn_mase)
+)   
+
+#----------------------------------          
+# MODEL 2: Regression tree
+#----------------------------------
+grid <- data.frame(cp = seq(0, 0.1, 0.01))
+fit_low_rpart <- train(Low ~ Volume+Attractiveness+
+                             Weekend+Month+Semester+Year+Day,
+                       data     = l_train,
+                       method   = "rpart",
+                       tuneGrid = grid)
+predicted_low <- predict(fit_low_rpart, l_test)
+
+# KPIs  
+low_rpart_rmse <- RMSE(l_test$Low, predicted_low)
+low_rpart_mae  <- MAE(l_test$Low, predicted_low)
+low_rpart_mase <- MASE(low_rpart_mae, low_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Low",
+                         Currency = currency,
+                         Model    = "MODEL 2",
+                         Description = "Regression tree",
+                         RMSE = low_rpart_rmse,
+                         MAE  = low_rpart_mae,
+                         MASE = low_rpart_mase)
+)
+
+fit_attract_rpart <- train(Attractiveness ~ Low+Volume+
+                                            Weekend+Month+Semester+Year+Day,
+                           data     = l_train,
+                           method   = "rpart",
+                           tuneGrid = grid)
+predicted_attract <- predict(fit_attract_rpart, l_test)
+
+# KPIs  
+attract_rpart_rmse <- RMSE(l_test$Attractiveness, predicted_attract)
+attract_rpart_mae  <- MAE(l_test$Attractiveness,  predicted_attract)
+attract_rpart_mase <- MASE(attract_rpart_mae, attract_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Attractiveness",
+                         Currency = currency,
+                         Model    = "MODEL 2",
+                         Description = "Regression tree",
+                         RMSE = attract_rpart_rmse,
+                         MAE  = attract_rpart_mae,
+                         MASE = attract_rpart_mase)
+)   
+
+#----------------------------------
+# Random forest
+#----------------------------------
+#--- Price
+fit_low_Rborist <- train(Low ~ Volume+Attractiveness+
+                               Weekend+Month+Semester+Year+Day,
+                         method   = "Rborist",
+                         tuneGrid = data.frame(predFixed = seq(33,45,2),
+                                               minNode   = seq(33, 45, 2)),
+                         data     = l_train)
+predicted_low <- predict(fit_low_Rborist, l_test)
+
+# KPIs  
+low_Rborist_rmse <- RMSE(l_test$Low, predicted_low)
+low_Rborist_mae  <- MAE(l_test$Low, predicted_low)
+low_Rborist_mase <- MASE(low_Rborist_mae, low_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Low",
+                         Currency = currency,
+                         Model    = "MODEL 3",
+                         Description = "Random forest",
+                         RMSE = low_Rborist_rmse,
+                         MAE  = low_Rborist_mae,
+                         MASE = low_Rborist_mase)
+)
+
+#--- Attractiveness
+fit_attract_Rborist <- train(Attractiveness ~ Low+Volume+
+                                              Weekend+Month+Semester+Year+Day,
+                             method   = "Rborist",
+                             tuneGrid = data.frame(predFixed = seq(33,45,2),
+                                                   minNode   = seq(33, 45, 2)),
+                             data     = l_train)
+predicted_attract <- predict(fit_attract_Rborist, l_test)
+predicted_attract_Rborist <- predicted_attract
+
+# KPIs  
+attract_Rborist_rmse <- RMSE(l_test$Attractiveness, predicted_attract)
+attract_Rborist_mae  <- MAE(l_test$Attractiveness,  predicted_attract)
+attract_Rborist_mase <- MASE(attract_Rborist_mae, attract_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Attractiveness",
+                         Currency = currency,
+                         Model    = "MODEL 3",
+                         Description = "Random forest",
+                         RMSE = attract_Rborist_rmse,
+                         MAE  = attract_Rborist_mae,
+                         MASE = attract_Rborist_mase)
+                      )
+                        
+#----------------------------------
+# MODEL 4: PCA
+#----------------------------------
+#--- Price
+rctrl <- trainControl(method = "cv", number= 5, returnResamp = "all")
+fit_low_pca  <- train(Low ~ Volume+Attractiveness+
+                            Weekend+Month+Semester+Year+Day,
+                      method= "pcr",
+                      data= l_train,
+                      trControl= rctrl,
+                      preProc= c("center", "scale"),
+                      tuneGrid= data.frame(ncomp= seq(1,10))
+)
+predicted_low <- predict(fit_low_pca, l_test)
+
+# KPIs  
+low_pca_rmse <- RMSE(l_test$Low, predicted_low)
+low_pca_mae  <- MAE(l_test$Low, predicted_low)
+low_pca_mase <- MASE(low_pca_mae, low_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Low",
+                         Currency = currency,
+                         Model    = "MODEL 4",
+                         Description = "PCA",
+                         RMSE = low_pca_rmse,
+                         MAE  = low_pca_mae,
+                         MASE = low_pca_mase)
+)
+
+#--- Attractiveness
+fit_attract_pca  <- train(Attractiveness ~ Low+Volume+
+                                           Weekend+Month+Semester+Year+Day,
+                          method= "pcr",
+                          data= l_train,
+                          trControl= rctrl,
+                          preProc= c("center", "scale"),
+                          tuneGrid= data.frame(ncomp= seq(1,10))
+)
+predicted_attract <- predict(fit_attract_pca, l_test)
+
+# KPIs  
+attract_pca_rmse <- RMSE(l_test$Attractiveness, predicted_attract)
+attract_pca_mae  <- MAE(l_test$Attractiveness,  predicted_attract)
+attract_pca_mase <- MASE(attract_pca_mae, attract_naive_mae) 
+
+ResError <-  bind_rows(ResError,
+                       data_frame( 
+                         Variable = "Attractiveness",
+                         Currency = currency,
+                         Model    = "MODEL 4",
+                         Description = "PCA",
+                         RMSE = attract_pca_rmse,
+                         MAE  = attract_pca_mae,
+                         MASE = attract_pca_mase)
+                       )
+
+ImpPrice   <- varImp(fit_low_Rborist)
+
+list(Errors            = ResError, 
+     ImpPrice          = varImp(fit_low_Rborist),
+     predicted_low     = predicted_low_knn,
+     predicted_attract = predicted_attract_Rborist)
+
+})
+#---------------------------------------------------------------
+#Errors <- as.data.frame(do.call(rbind, output))
+
+Errors            <- output[[1]]$Errors
+imp_low           <- output[[1]]$ImpPrice
+predicted_low     <- output[[1]]$predicted_low
+predicted_attract <- output[[1]]$predicted_attract
+
+```
+
+When predicting Price, it appears Random forest is the best model:
+
+```{r XRPPRiceErrors, echo= FALSE}
+Errors %>% 
+  filter(Variable== "Low")  %>% 
+  select(-Variable) %>%
+  kbl(booktabs = TRUE, linesep = "", caption = 'Price forecast error', caption.short= "Price") %>% 
+  kable_styling(latex_options = c("striped","HOLD_position")) %>%
+  row_spec(4, bold = T, color = "yellow", background = "blue") %>%
+  column_spec(1, bold=T)  %>%
+  collapse_rows(columns = 1, latex_hline = "major", valign = "middle")
+```
+
+
+
+I used *varImp* that extracts variable importance random forest model. It appears below that Year 2018, Thursdays and Attractiveness accounts the most importnat variables. 
+
+
+```{r XRPPRiceErrors2, echo= FALSE}
+imp_low$importance %>% 
+    arrange(desc(imp_low$importance)) %>% top_n(5) %>%
+    kbl(col.names="Importance",
+        booktabs = TRUE, linesep = "", caption = 'Important variables for price') %>% 
+    kable_styling(latex_options = c("striped","HOLD_position"))
+```
+
+
+When predicting Attractiveness, it appears Kernel Nearest Neighbors (KNN) is the best model:
+
+```{r XRPAttractErrors, echo= FALSE}
+Errors %>% 
+  filter(Variable== "Attractiveness")  %>% 
+  select(-Variable) %>%
+  kbl(booktabs = TRUE, linesep = "", caption = 'Attracivenees forecast error') %>% 
+  kable_styling(latex_options = c("striped","HOLD_position")) %>%
+  row_spec(2, bold = T, color = "yellow", background = "blue") %>%
+  column_spec(1, bold=F)  %>% 
+  collapse_rows(columns = 1, latex_hline = "major", valign = "middle")
+
+```
+
+\pagebreak
+
+# Conclusion
+
+While exponential smoothing models are based on a description of the trend and seasonality in the data, ARIMA models aim to describe the autocorrelations in the data.
+It could be considered beyond the content of this report but classical Decomposition, exponential approach and other classical algorithm could be applied to the data and their result compared to the machine learning models.
+Many machine learning models are available and deep learning or self-learning algorithm may worth being tested.
+On purpose, I ignored exogenous factors but it is well known that financial and currencies markets are quite sensitive to external events  (Ref. Elon Musk's tweets, Warren buffet's articles, central bank's reports, Covid crisis, countries' GDP etc). These external events would explain the outliers and could be modelised in the dataset as binary variables to describe the presence or the absence of an influencable external event.\   
+Despite these missing analysis that may shrink the forecast error,
+let's keep in mind that the value of AI lies not only in improving the forecast but rather in making better decisions than what humans alone can do.\
+Additionally, the next step -started but not presentable would be to actually use our model to predict what are the expected future values for the price and the attractiveness oof the cryptomoney XRP. 
+
+As a conclusion of the conclusion, I would highly recommend the course to anyone interested in data science and thank the staff for their very prompt replies to my questions but also HarvardX and the instructor Rafael Irizarry for the quality of his course.
+
+\pagebreak
+
+
+
+
